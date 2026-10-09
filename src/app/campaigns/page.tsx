@@ -2,7 +2,7 @@ import type { Metadata } from "next"
 import { CampaignsView } from "@/app/campaigns/campaigns-view"
 
 export const metadata: Metadata = {
-  title: "Today Feed",
+  title: "Campaigns",
 }
 
 export default function CampaignsPage() {

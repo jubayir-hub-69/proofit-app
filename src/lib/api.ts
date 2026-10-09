@@ -33,8 +33,8 @@ export function covalentHeaders(): HeadersInit {
 }
 
 /**
- * GoPlus token security URL. The access token stays in `goplusHeaders()`
- * and is never placed on the query string.
+ * GoPlus token security URL. Server routes attach the access token.
+ * The token is never placed on the query string.
  */
 export function goplusTokenSecurityUrl(chainId: number, contractAddress: string) {
   const url = new URL(`${GOPLUS_BASE}/token_security/${chainId}`)
@@ -42,12 +42,16 @@ export function goplusTokenSecurityUrl(chainId: number, contractAddress: string)
   return url.toString()
 }
 
+/** GoPlus phishing-site check. Server routes attach the access token. */
+export function goplusPhishingSiteUrl(target: string) {
+  const url = new URL(`${GOPLUS_BASE}/phishing_site`)
+  url.searchParams.set("url", target)
+  return url.toString()
+}
+
+/** Public GoPlus headers. Access tokens are attached in server-only `goplusAuthHeaders`. */
 export function goplusHeaders(): HeadersInit {
-  const key = process.env.NEXT_PUBLIC_GOPLUS_API_KEY?.trim()
-  return {
-    Accept: "application/json",
-    ...(key ? { Authorization: `Bearer ${key}` } : {}),
-  }
+  return { Accept: "application/json" }
 }
 
 export interface GoPlusTokenSecurityResponse {

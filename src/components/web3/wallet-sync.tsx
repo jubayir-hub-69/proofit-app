@@ -2,16 +2,15 @@
 
 import { useEffect } from "react"
 import { Input } from "@/components/ui/input"
-import { useBalances } from "@/hooks/use-balances"
+import { usePortfolio } from "@/hooks/use-portfolio"
 import { useWalletSync } from "@/hooks/use-wallet-sync"
 import { useWatchAddress } from "@/hooks/use-watch-address"
-import { formatChain, formatTokenAmount, shortenAddress } from "@/lib/formatters"
-import { mainnet } from "wagmi/chains"
+import { formatUsd, shortenAddress } from "@/lib/formatters"
 
 export function WalletSync() {
   const { input, setInput, address, isValid } = useWatchAddress()
   const { status, sync } = useWalletSync()
-  const balance = useBalances()
+  const portfolio = usePortfolio(address)
   const trimmed = input.trim()
   const invalid = trimmed.length > 0 && !isValid
   const syncing = Boolean(address) && (status.pending || status.address !== address)
@@ -28,12 +27,14 @@ export function WalletSync() {
   let hint = "Paste a public address. Proofit never asks to sign."
   if (invalid) hint = "Enter a valid EVM address."
   else if (status.error && status.address === address) hint = status.error
-  else if (address && balance.isLoading) {
-    hint = `${shortenAddress(address)} · reading ${formatChain(mainnet.id)} balance`
-  } else if (address && balance.value !== undefined) {
-    hint = `${shortenAddress(address)} · ${formatTokenAmount(balance.value, balance.decimals)} ${balance.symbol}`
-  } else if (address && balance.isError) {
-    hint = `${shortenAddress(address)} · balance unavailable on this RPC`
+  else if (address && portfolio.isLoading) {
+    hint = `${shortenAddress(address)} · reading on-chain balances`
+  } else if (address && portfolio.data) {
+    const worth =
+      portfolio.data.netWorthUsd === null ? "Unlisted / N/A" : formatUsd(portfolio.data.netWorthUsd)
+    hint = `${shortenAddress(address)} · portfolio ${worth}`
+  } else if (address && portfolio.isError) {
+    hint = `${shortenAddress(address)} · portfolio unavailable`
   } else if (address && status.settled && status.imported !== null) {
     hint = `${shortenAddress(address)} · indexed ${status.imported} transactions`
   }

@@ -145,6 +145,27 @@ function isManual(row: TransactionRow) {
   )
 }
 
+const SCREENING_KEYS = [
+  "spam",
+  "spamReasons",
+  "tokens",
+  "tokenAddresses",
+  "spend",
+  "gasPriceSource",
+  "nativeUsd",
+] as const
+
+function screeningFields(value: Json | null) {
+  const raw = rawObject(value)
+  const picked: { [key: string]: Json } = {}
+  for (const key of SCREENING_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(raw, key)) {
+      picked[key] = raw[key] ?? null
+    }
+  }
+  return picked
+}
+
 function keepManualTag(existing: TransactionRow, incoming: TransactionRow): TransactionRow {
   if (!isManual(existing)) return { ...incoming, id: existing.id }
   return {
@@ -153,7 +174,10 @@ function keepManualTag(existing: TransactionRow, incoming: TransactionRow): Tran
     type: existing.type,
     campaign_id: existing.campaign_id,
     value_usd: existing.value_usd,
-    raw_data: existing.raw_data,
+    raw_data: {
+      ...rawObject(existing.raw_data),
+      ...screeningFields(incoming.raw_data),
+    },
   }
 }
 
@@ -259,6 +283,14 @@ async function supabaseSend(path: string, body: unknown) {
       `Supabase request failed (${response.status}). Confirm supabase/schema.sql has been applied.`,
     )
   }
+}
+
+export async function restSelect<T>(path: string): Promise<T> {
+  return supabaseFetch<T>(path)
+}
+
+export async function restUpsert(path: string, body: unknown) {
+  await supabaseSend(path, body)
 }
 
 async function supabaseFetch<T>(path: string): Promise<T> {

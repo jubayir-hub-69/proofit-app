@@ -1,6 +1,7 @@
 import { getAddress, isAddress } from "viem"
 import { loadStore, persistenceMode } from "@/lib/db"
 import { selectIndexerSource } from "@/lib/indexer/sources"
+import { buildEthOpportunity, type OpportunityBook } from "@/lib/ledger"
 import { buildLedgerReport } from "@/lib/ledger-report"
 
 export async function GET(request: Request) {
@@ -27,11 +28,18 @@ export async function GET(request: Request) {
       checklist: store.campaign_checklist,
       address,
     })
+    let opportunity: OpportunityBook = { spotEthUsd: null, points: [] }
+    try {
+      opportunity = await buildEthOpportunity(transactions)
+    } catch (error) {
+      console.error(error)
+    }
     return Response.json({
       ok: true,
       persistence: persistenceMode(),
       indexer: selectIndexerSource(),
       address: address ?? null,
+      opportunity,
       ...report,
       catalog: store.campaigns,
       checklist: store.campaign_checklist,

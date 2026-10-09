@@ -54,3 +54,27 @@ create index if not exists transactions_campaign_idx
 
 create index if not exists checklist_wallet_idx
   on public.campaign_checklist (wallet_address);
+
+-- Operator-supplied opportunities. The app does not insert sample rows.
+create table if not exists public.feed_items (
+  id text primary key,
+  title text not null,
+  summary text,
+  url text,
+  chain_id integer,
+  capital_usd numeric(20, 2),
+  regions text[] not null default '{}',
+  deadline timestamptz,
+  campaign_id text references public.campaigns (id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists feed_items_deadline_idx
+  on public.feed_items (deadline);
+
+create table if not exists public.alert_subscriptions (
+  id text primary key,
+  chat_id text not null unique,
+  wallet_address text,
+  created_at timestamptz not null default now()
+);

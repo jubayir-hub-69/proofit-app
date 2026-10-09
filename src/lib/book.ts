@@ -32,6 +32,11 @@ export function netImpactUsd(row: TransactionRow) {
   return roundUsd(row.value_usd - row.gas_fee_usd)
 }
 
+/** True when every ERC-20 on the row was flagged as spam or dust. */
+export function isSpamTransaction(row: TransactionRow) {
+  return rawRecord(row.raw_data)?.spam === true
+}
+
 /** Templates stay visible until a wallet-specific completion row exists. */
 export function checklistForWallet(
   rows: readonly CampaignChecklistRow[],

@@ -1,7 +1,9 @@
 "use client"
 
+import { LegalDisclaimer } from "@/components/legal-disclaimer"
 import { PageHeader } from "@/components/layout/page-header"
 import { Badge } from "@/components/ui/badge"
+import { useFilteredLedger } from "@/hooks/use-filtered-ledger"
 import { useLedgerBook } from "@/hooks/use-ledger-book"
 import { useSyncStatus } from "@/hooks/use-wallet-sync"
 import { useWatchAddress } from "@/hooks/use-watch-address"
@@ -30,17 +32,19 @@ export function CampaignsView() {
   const book = useLedgerBook(address, ready)
   const waiting = Boolean(address) && !status.error && (!ready || book.isLoading)
   const data = book.data
+  const { view } = useFilteredLedger(data, address)
+  const summary = view?.report.summary
   const tasks = address && data ? checklistForWallet(data.checklist, address) : []
 
   return (
     <div>
       <PageHeader
         eyebrow="Campaigns"
-        title="Today Feed"
+        title="Campaigns"
         description={
-          data
-            ? `${data.summary.activeCampaignCount} indexed campaigns are active. Outstanding estimate is ${formatUsd(data.summary.unclaimedUsd)}.`
-            : "Campaign totals follow the watched wallet's indexed transactions."
+          summary
+            ? `${summary.activeCampaignCount} indexed campaigns are active. Outstanding estimate is ${formatUsd(summary.unclaimedUsd)}.`
+            : "Campaign totals follow the watched wallet's indexed transactions. Live opportunities are on Today Feed."
         }
       />
 
@@ -59,7 +63,7 @@ export function CampaignsView() {
       {data && !waiting ? (
         <ul className="space-y-3">
           {data.catalog.map((campaign) => {
-            const stats = data.campaigns.find((item) => item.campaignId === campaign.id)
+            const stats = view?.report.campaigns.find((item) => item.campaignId === campaign.id)
             const related = tasks.filter((item) => item.campaign_id === campaign.id)
             const done = related.filter((item) => item.is_completed).length
             const progress =
@@ -103,6 +107,7 @@ export function CampaignsView() {
           })}
         </ul>
       ) : null}
+      <LegalDisclaimer />
     </div>
   )
 }

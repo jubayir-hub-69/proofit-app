@@ -8,27 +8,32 @@ export const metadata: Metadata = {
 
 const publicKeys = [
   {
-    name: "NEXT_PUBLIC_ALCHEMY_KEY",
-    configured: Boolean(process.env.NEXT_PUBLIC_ALCHEMY_KEY),
-    note: "Optional hosted RPC. Empty uses the public chain endpoints.",
-  },
-  {
     name: "NEXT_PUBLIC_COVALENT_API_KEY",
     configured: Boolean(process.env.NEXT_PUBLIC_COVALENT_API_KEY),
     note: "GoldRush history for POST /api/wallets/sync. Empty uses Alchemy, then public RPC logs.",
-  },
-  {
-    name: "NEXT_PUBLIC_GOPLUS_API_KEY",
-    configured: Boolean(process.env.NEXT_PUBLIC_GOPLUS_API_KEY),
-    note: "GoPlus access token for Safety Gate.",
   },
 ] as const
 
 const serverKeys = [
   {
+    name: "ALCHEMY_API_KEY",
+    configured: Boolean(process.env.ALCHEMY_API_KEY),
+    note: "Server-only RPC for balances and indexing. The browser uses public chain endpoints.",
+  },
+  {
+    name: "GOPLUS_APP_KEY",
+    configured: Boolean(process.env.GOPLUS_APP_KEY),
+    note: "Server-only. Safety Gate signs a GoPlus access token with the app secret.",
+  },
+  {
+    name: "GOPLUS_APP_SECRET",
+    configured: Boolean(process.env.GOPLUS_APP_SECRET),
+    note: "Server-only. Never rendered and never sent to the browser.",
+  },
+  {
     name: "TELEGRAM_BOT_TOKEN",
     configured: Boolean(process.env.TELEGRAM_BOT_TOKEN),
-    note: "Server-only. Used later for alerts. The value is never sent to the browser.",
+    note: "Server-only. Today Feed uses it to send deadline reminders. The value is never sent to the browser.",
   },
   {
     name: "DATABASE_URL",

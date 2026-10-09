@@ -20,7 +20,7 @@ export const metadata: Metadata = {
     template: "%s · Proofit",
   },
   description:
-    "Read-only desk for airdrops, campaigns, and gas-adjusted net ROI.",
+    "Desk for campaigns, gas-adjusted net ROI, live opportunities, and safety checks.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

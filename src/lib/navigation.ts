@@ -1,5 +1,6 @@
 import {
   LayoutDashboard,
+  Library,
   ListChecks,
   NotebookPen,
   Rss,
@@ -17,7 +18,7 @@ export interface NavItem {
 }
 
 /**
- * Today Feed is the /campaigns module.
+ * Today Feed is /feed. /campaigns remains the indexed campaign book.
  * Checklist and Trader Journal sit beside the core route set.
  */
 export const primaryNav: NavItem[] = [
@@ -34,10 +35,16 @@ export const primaryNav: NavItem[] = [
     description: "Gas-adjusted profit and loss",
   },
   {
-    href: "/campaigns",
+    href: "/feed",
     label: "Today Feed",
     icon: Rss,
-    description: "Campaigns moving today",
+    description: "Stored opportunities and deadline alerts",
+  },
+  {
+    href: "/campaigns",
+    label: "Campaigns",
+    icon: Library,
+    description: "Indexed campaign totals",
   },
   {
     href: "/checklist",

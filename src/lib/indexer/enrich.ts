@@ -1,4 +1,5 @@
 import { formatUnits, type Hash } from "viem"
+import { getServerRpcClient } from "@/lib/alchemy"
 import type { SyncChain } from "@/lib/indexer/chains"
 import {
   categorizeTransaction,
@@ -6,12 +7,12 @@ import {
 } from "@/lib/indexer/categorize"
 import {
   gasFeeUsdFromReceipt,
-  REFERENCE_NATIVE_USD,
   roundUsd,
   type GasPriceSource,
 } from "@/lib/indexer/gas"
+import { erc20TokenAddresses } from "@/lib/indexer/spam"
 import type { IndexerName, NormalizedTransaction } from "@/lib/indexer/types"
-import { getPublicClient } from "@/lib/web3/client"
+import { recordSpend } from "@/lib/ledger"
 import type { Json, TransactionRow } from "@/types/database"
 
 function directionOf(wallet: string, from: string | null, to: string | null) {
@@ -26,6 +27,7 @@ export async function enrichTransaction(
   wallet: `0x${string}`,
   tx: NormalizedTransaction,
   indexer: IndexerName,
+  marketNativeUsd: number | null,
 ): Promise<{ row: TransactionRow; priceSource: GasPriceSource }> {
   let input = tx.input
   let to = tx.to
@@ -35,11 +37,18 @@ export async function enrichTransaction(
   let l1FeeWei = BigInt(0)
   let nativeValueWei = BigInt(0)
 
-  const client = getPublicClient(chain.chain)
-  const [transaction, receipt] = await Promise.all([
-    client.getTransaction({ hash: tx.hash as Hash }).catch(() => null),
-    client.getTransactionReceipt({ hash: tx.hash as Hash }).catch(() => null),
-  ])
+  let client: ReturnType<typeof getServerRpcClient> | null = null
+  try {
+    client = getServerRpcClient(chain.id)
+  } catch {
+    client = null
+  }
+  const [transaction, receipt] = client
+    ? await Promise.all([
+        client.getTransaction({ hash: tx.hash as Hash }).catch(() => null),
+        client.getTransactionReceipt({ hash: tx.hash as Hash }).catch(() => null),
+      ])
+    : [null, null]
   if (transaction) {
     input = transaction.input
     to = transaction.to
@@ -54,13 +63,13 @@ export async function enrichTransaction(
   }
 
   const quoted = tx.quoteRate !== null && tx.quoteRate > 0
-  const nativeUsd = quoted ? tx.quoteRate! : (REFERENCE_NATIVE_USD[chain.id] ?? 0)
+  const nativeUsd = quoted ? tx.quoteRate! : marketNativeUsd !== null && marketNativeUsd > 0 ? marketNativeUsd : 0
   let notionalUsd = tx.notionalUsd
   if ((notionalUsd === null || notionalUsd <= 0) && nativeValueWei > BigInt(0) && nativeUsd > 0) {
     notionalUsd = roundUsd(Number(formatUnits(nativeValueWei, 18)) * nativeUsd)
   }
   let gasFeeUsd = 0
-  let priceSource: GasPriceSource = "reference"
+  let priceSource: GasPriceSource = "unpriced"
   let feeWei = "0"
 
   if (gasUsed !== null && effectiveGasPrice !== null && nativeUsd > 0) {
@@ -72,7 +81,7 @@ export async function enrichTransaction(
     })
     gasFeeUsd = priced.gasFeeUsd
     feeWei = priced.feeWei.toString()
-    priceSource = quoted ? "receipt" : "reference"
+    priceSource = quoted ? "receipt" : "market"
   } else if (tx.providerGasUsd !== null) {
     gasFeeUsd = roundUsd(tx.providerGasUsd)
     priceSource = "provider"
@@ -85,6 +94,14 @@ export async function enrichTransaction(
     topics: tx.topics,
   })
   const direction = directionOf(wallet, from, to)
+  const tokenAddresses = receipt ? erc20TokenAddresses(receipt.logs) : []
+  const capitalSpentUsd =
+    direction === "out" && notionalUsd !== null && notionalUsd > 0 ? notionalUsd : 0
+  const spend = recordSpend({
+    timestamp: tx.blockTimestamp,
+    gasSpentUsd: gasFeeUsd,
+    capitalSpentUsd,
+  })
   const rawData: { [key: string]: Json } = {
     indexer,
     protocol: category.protocol,
@@ -99,6 +116,8 @@ export async function enrichTransaction(
     l1FeeWei: l1FeeWei.toString(),
     feeWei,
     nativeUsd,
+    tokenAddresses,
+    spend: spend ? { timestamp: spend.timestamp, usd: spend.usd } : null,
   }
 
   return {

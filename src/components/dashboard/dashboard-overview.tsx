@@ -2,23 +2,18 @@
 
 import { Fuel, Gift, Radio, TrendingUp } from "lucide-react"
 import { MetricCard } from "@/components/dashboard/metric-card"
-import { PageHeader } from "@/components/layout/page-header"
+import { OpportunityCost } from "@/components/ledger/opportunity-cost"
+import { SpamToggle } from "@/components/ledger/spam-toggle"
+import { LegalDisclaimer } from "@/components/legal-disclaimer"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { useBalances } from "@/hooks/use-balances"
+import { useFilteredLedger } from "@/hooks/use-filtered-ledger"
 import { useLedgerBook } from "@/hooks/use-ledger-book"
 import { useSyncStatus } from "@/hooks/use-wallet-sync"
 import { useWatchAddress } from "@/hooks/use-watch-address"
 import { checklistForWallet, netImpactUsd, protocolLabel } from "@/lib/book"
-import {
-  formatChain,
-  formatTimestamp,
-  formatTokenAmount,
-  formatUsd,
-  shortenAddress,
-} from "@/lib/formatters"
+import { formatChain, formatTimestamp, formatUsd, shortenAddress } from "@/lib/formatters"
 import { transactionKindLabel } from "@/types/transaction"
-import { mainnet } from "wagmi/chains"
 
 const EMPTY_PROMPT =
   "Enter an EVM wallet address above to calculate real Net-ROI and gas history."
@@ -29,36 +24,27 @@ export function DashboardOverview() {
   const ready =
     Boolean(address) && status.settled && status.address === address && !status.error
   const book = useLedgerBook(address, ready)
-  const balance = useBalances()
   const waiting =
     Boolean(address) && !status.error && (!ready || book.isLoading)
 
-  let watchLine = "No watch address yet. Paste one in the top bar. Nothing is signed."
-  if (address && balance.value !== undefined) {
-    watchLine = `Watching ${shortenAddress(address)} · ${formatTokenAmount(balance.value, balance.decimals)} ${balance.symbol} on ${formatChain(mainnet.id)}`
-  } else if (address && balance.isError) {
-    watchLine = `Watching ${shortenAddress(address)} · native balance did not load`
-  } else if (address) {
-    watchLine = `Watching ${shortenAddress(address)}`
-  }
+  const watchLine = address
+    ? `Watching ${shortenAddress(address)}. Ledger totals stay separate from the portfolio sum above.`
+    : "No watch address yet. Paste one in the top bar. Nothing is signed."
 
   const data = book.data
+  const { hideSpam, setHideSpam, view } = useFilteredLedger(data, address)
+  const summary = view?.report.summary
   const tasks =
     address && data ? checklistForWallet(data.checklist, address) : []
   const openTasks = tasks.filter((item) => !item.is_completed).length
-  const recent = data?.transactions.slice(0, 5) ?? []
+  const recent = view?.transactions.slice(0, 5) ?? []
   const unclaimed =
-    data?.campaigns.filter(
+    view?.report.campaigns.filter(
       (campaign) => campaign.estimatedRewardUsd > campaign.realizedValueUsd,
     ) ?? []
 
   return (
     <div>
-      <PageHeader
-        eyebrow="Desk"
-        title="Dashboard"
-        description="Gas-adjusted net ROI for the watched address. Figures come from the indexed ledger."
-      />
       <p className="mb-5 text-sm text-zinc-400">{watchLine}</p>
 
       {!address ? (
@@ -84,28 +70,38 @@ export function DashboardOverview() {
         <p className="text-sm text-rose-300">{book.error.message}</p>
       ) : null}
 
-      {data && !waiting ? (
+      {data && view && summary && !waiting ? (
         <>
-          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="mb-4">
+            <SpamToggle
+              checked={hideSpam}
+              hiddenCount={view.hiddenCount}
+              onChange={setHideSpam}
+            />
+            <p className="mt-1 text-xs text-zinc-500">
+              Hide Spam & Dust Tokens changes these ledger totals only. Holdings stay listed, including unpriced assets.
+            </p>
+          </div>
+          <section className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <MetricCard
               label="Total Net ROI"
-              value={formatUsd(data.summary.netRoiUsd, { signed: true })}
-              detail={`${data.summary.transactionCount} indexed transactions, after gas`}
+              value={formatUsd(summary.netRoiUsd, { signed: true })}
+              detail={`${formatUsd(summary.valueUsd)} claimed · ${summary.transactionCount} indexed transactions, after gas`}
               icon={TrendingUp}
-              tone={data.summary.netRoiUsd >= 0 ? "positive" : "negative"}
+              tone={summary.netRoiUsd >= 0 ? "positive" : "negative"}
               href="/ledger"
             />
             <MetricCard
               label="Total Gas Spent"
-              value={formatUsd(data.summary.gasSpentUsd)}
-              detail={`Across ${data.summary.chainCount} networks`}
+              value={formatUsd(summary.gasSpentUsd)}
+              detail={`Across ${summary.chainCount} networks`}
               icon={Fuel}
               tone="neutral"
               href="/ledger"
             />
             <MetricCard
               label="Active Campaigns"
-              value={String(data.summary.activeCampaignCount)}
+              value={String(summary.activeCampaignCount)}
               detail={`${openTasks} open checklist tasks`}
               icon={Radio}
               tone="neutral"
@@ -113,9 +109,9 @@ export function DashboardOverview() {
             />
             <MetricCard
               label="Unclaimed Airdrops"
-              value={formatUsd(data.summary.unclaimedUsd)}
+              value={formatUsd(summary.unclaimedUsd)}
               detail={
-                data.summary.unclaimedUsd > 0
+                summary.unclaimedUsd > 0
                   ? "Estimate still ahead of indexed credit"
                   : "No outstanding estimate on indexed campaigns"
               }
@@ -123,6 +119,13 @@ export function DashboardOverview() {
               tone="warning"
               href="/campaigns"
             />
+          </section>
+
+          <section className="mt-6">
+            <h2 className="text-sm font-medium text-zinc-100">Ledger / Performance</h2>
+            <div className="mt-3">
+              <OpportunityCost summary={view.opportunity} />
+            </div>
           </section>
 
           <section className="mt-6 grid gap-3 lg:grid-cols-5">
@@ -133,7 +136,9 @@ export function DashboardOverview() {
               <CardContent className="px-0 pb-2">
                 {recent.length === 0 ? (
                   <p className="px-5 py-4 text-sm text-zinc-500">
-                    No transactions in the indexed window.
+                    {hideSpam && data.transactions.length > 0
+                      ? "Spam and dust transfers are hidden."
+                      : "No transactions in the indexed window."}
                   </p>
                 ) : (
                   <ul>
@@ -211,6 +216,7 @@ export function DashboardOverview() {
           </section>
         </>
       ) : null}
+      <LegalDisclaimer />
     </div>
   )
 }

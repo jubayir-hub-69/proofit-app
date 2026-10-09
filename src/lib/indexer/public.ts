@@ -1,16 +1,14 @@
 import {
   createPublicClient,
-  getAddress,
   http,
   parseAbiItem,
   type Address,
   type PublicClient,
 } from "viem"
-import { PROTOCOL_RULES } from "@/lib/indexer/categorize"
+import { publicRpcUrls, rememberPublicRpc } from "@/lib/chains"
 import type { SyncChain } from "@/lib/indexer/chains"
 import { txLimit } from "@/lib/indexer/sources"
 import type { NormalizedTransaction } from "@/lib/indexer/types"
-import { publicRpcUrls, rememberPublicRpc } from "@/lib/web3/config"
 
 const TRANSFER = parseAbiItem(
   "event Transfer(address indexed from, address indexed to, uint256 value)",
@@ -23,27 +21,6 @@ const APPROVAL = parseAbiItem(
 export const PUBLIC_LOOKBACK_BLOCKS = 4500
 const CHUNK_BLOCKS = BigInt(900)
 
-const TOKEN_CONTRACTS: Record<number, readonly string[]> = {
-  8453: [
-    "0x4200000000000000000000000000000000000006",
-    "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-    "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2",
-  ],
-  42161: [
-    "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
-    "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
-    "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8",
-    "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
-    "0x912CE59144191C1204E64559FE8253a0e49E6548",
-  ],
-  137: [
-    "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-    "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
-    "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
-    "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-  ],
-}
-
 interface FoundTx {
   hash: `0x${string}`
   blockNumber: bigint
@@ -51,12 +28,6 @@ interface FoundTx {
   to: string | null
   logAddresses: string[]
   topics: string[]
-}
-
-function watchContracts(chainId: number): Address[] {
-  const tokens = TOKEN_CONTRACTS[chainId] ?? []
-  const protocols = PROTOCOL_RULES.flatMap((rule) => rule.addresses)
-  return [...new Set([...tokens, ...protocols].map((item) => getAddress(item)))]
 }
 
 function errorText(error: unknown) {
@@ -111,26 +82,21 @@ async function queryLogs(
   wallet: Address,
   fromBlock: bigint,
   toBlock: bigint,
-  contracts: Address[] | undefined,
 ) {
-  const scoped = contracts ? { address: contracts } : {}
   const [sent, received, approvals] = await Promise.all([
     client.getLogs({
-      ...scoped,
       event: TRANSFER,
       args: { from: wallet },
       fromBlock,
       toBlock,
     }),
     client.getLogs({
-      ...scoped,
       event: TRANSFER,
       args: { to: wallet },
       fromBlock,
       toBlock,
     }),
     client.getLogs({
-      ...scoped,
       event: APPROVAL,
       args: { owner: wallet },
       fromBlock,
@@ -147,30 +113,18 @@ async function logsInRange(
   wallet: Address,
   fromBlock: bigint,
   toBlock: bigint,
-  contracts: Address[],
-  addressed: { current: boolean },
   depth = 0,
 ): Promise<WalletLog[]> {
   try {
-    return await queryLogs(
-      client,
-      wallet,
-      fromBlock,
-      toBlock,
-      addressed.current ? contracts : undefined,
-    )
+    return await queryLogs(client, wallet, fromBlock, toBlock)
   } catch (error) {
     const text = errorText(error)
-    if (!addressed.current && needsContractAddress(text)) {
-      addressed.current = true
-      return logsInRange(client, wallet, fromBlock, toBlock, contracts, addressed, depth)
-    }
     const span = toBlock - fromBlock
-    if (span > BigInt(40) && depth < 6 && isRangeError(text)) {
+    if (span > BigInt(40) && depth < 6 && isRangeError(text) && !needsContractAddress(text)) {
       const mid = fromBlock + span / BigInt(2)
       const [older, newer] = await Promise.all([
-        logsInRange(client, wallet, fromBlock, mid, contracts, addressed, depth + 1),
-        logsInRange(client, wallet, mid + BigInt(1), toBlock, contracts, addressed, depth + 1),
+        logsInRange(client, wallet, fromBlock, mid, depth + 1),
+        logsInRange(client, wallet, mid + BigInt(1), toBlock, depth + 1),
       ])
       return [...older, ...newer]
     }
@@ -209,15 +163,13 @@ async function scanUrl(chain: SyncChain, wallet: Address, url: string) {
   const latest = await client.getBlockNumber()
   const span = BigInt(PUBLIC_LOOKBACK_BLOCKS)
   const start = latest > span ? latest - span : BigInt(0)
-  const contracts = watchContracts(chain.id)
-  const addressed = { current: false }
   const found = new Map<string, FoundTx>()
   const limit = txLimit()
 
   for (let upper = latest; upper >= start && found.size < limit; ) {
     const lower =
       upper - CHUNK_BLOCKS + BigInt(1) < start ? start : upper - CHUNK_BLOCKS + BigInt(1)
-    const logs = await logsInRange(client, wallet, lower, upper, contracts, addressed)
+    const logs = await logsInRange(client, wallet, lower, upper)
     for (const log of logs) rememberLog(found, log)
     if (lower === BigInt(0)) break
     upper = lower - BigInt(1)

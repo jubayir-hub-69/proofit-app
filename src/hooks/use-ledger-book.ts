@@ -1,6 +1,7 @@
 "use client"
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
+import type { OpportunityBook } from "@/lib/ledger"
 import type { LedgerReport } from "@/lib/ledger-report"
 import type { IndexerName } from "@/lib/indexer/types"
 import type {
@@ -17,6 +18,7 @@ export interface LedgerPayload extends LedgerReport {
   catalog: CampaignRow[]
   checklist: CampaignChecklistRow[]
   transactions: TransactionRow[]
+  opportunity: OpportunityBook
 }
 
 export function useLedgerBook(address?: `0x${string}`, enabled = true) {

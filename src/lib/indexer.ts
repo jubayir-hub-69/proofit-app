@@ -8,9 +8,11 @@ import {
   persistenceMode,
   type Persistence,
 } from "@/lib/db"
+import { historicalPrices, unixSeconds } from "@/lib/defillama"
 import { assertSyncChains, SYNC_CHAINS, type SyncChain } from "@/lib/indexer/chains"
 import { enrichTransaction } from "@/lib/indexer/enrich"
 import { fetchPublicTransactions, PUBLIC_LOOKBACK_BLOCKS } from "@/lib/indexer/public"
+import { applySpamFlags } from "@/lib/indexer/spam"
 import {
   fetchAlchemyTransactions,
   fetchCovalentTransactions,
@@ -98,14 +100,71 @@ async function mapPool<T, R>(
   return results
 }
 
+function sourceOrder(chain: SyncChain, preferred: IndexerName) {
+  const attempts: IndexerName[] = []
+  if (preferred === "covalent" && chain.covalentName) attempts.push("covalent")
+  if (chain.alchemyHost && process.env.ALCHEMY_API_KEY?.trim()) {
+    attempts.push("alchemy")
+  }
+  attempts.push("public")
+  return [...new Set(attempts)]
+}
+
 async function loadChain(
   chain: SyncChain,
   address: `0x${string}`,
-  indexer: IndexerName,
+  preferred: IndexerName,
 ) {
-  if (indexer === "covalent") return fetchCovalentTransactions(chain, address)
-  if (indexer === "alchemy") return fetchAlchemyTransactions(chain, address)
-  return fetchPublicTransactions(chain, address)
+  let last: Error | null = null
+  for (const source of sourceOrder(chain, preferred)) {
+    try {
+      if (source === "covalent") return await fetchCovalentTransactions(chain, address)
+      if (source === "alchemy") return await fetchAlchemyTransactions(chain, address)
+      return await fetchPublicTransactions(chain, address)
+    } catch (error) {
+      last = error instanceof Error ? error : new Error("Chain sync failed.")
+    }
+  }
+  throw last ?? new Error(`No indexer could read ${chain.name}.`)
+}
+
+async function nativeMarkets(
+  chains: readonly SyncChain[],
+  txs: readonly NormalizedTransaction[],
+) {
+  const wanted: { coinId: string; timestamp: number; key: string }[] = []
+  for (const tx of txs) {
+    if (tx.quoteRate !== null && tx.quoteRate > 0) continue
+    const chain = chains.find((item) => item.id === tx.chainId)
+    if (!chain?.nativePriceId) continue
+    const timestamp = unixSeconds(tx.blockTimestamp)
+    if (timestamp === null) continue
+    wanted.push({
+      coinId: chain.nativePriceId,
+      timestamp,
+      key: `${tx.chainId}:${tx.hash}:${chain.nativePriceId}`,
+    })
+  }
+  const groups = new Map<string, number[]>()
+  for (const item of wanted) {
+    const stamps = groups.get(item.coinId) ?? []
+    stamps.push(item.timestamp)
+    groups.set(item.coinId, stamps)
+  }
+  const prices = new Map<string, Map<number, number | null>>()
+  await Promise.all(
+    [...groups.entries()].map(async ([coinId, timestamps]) => {
+      prices.set(coinId, await historicalPrices(coinId, timestamps))
+    }),
+  )
+  const byHash = new Map<string, number>()
+  for (const item of wanted) {
+    const price = prices.get(item.coinId)?.get(item.timestamp)
+    if (price !== null && price !== undefined && price > 0) {
+      byHash.set(item.key, price)
+    }
+  }
+  return byHash
 }
 
 export async function syncWallet(input: unknown): Promise<SyncWalletResult> {
@@ -117,24 +176,22 @@ export async function syncWallet(input: unknown): Promise<SyncWalletResult> {
 
   if (indexer === "public") {
     warnings.push(
-      `No Covalent or Alchemy key is set. History is read from public RPC logs over the last ${PUBLIC_LOOKBACK_BLOCKS} blocks, and gas is priced from the transaction receipt.`,
+      `No Covalent or Alchemy key is set. History is read from each chain's public RPC over the last ${PUBLIC_LOOKBACK_BLOCKS} blocks, and gas is priced from the receipt using DefiLlama.`,
     )
   }
 
-  const settled = await Promise.all(
-    chains.map(async (chain) => {
-      try {
-        const rows = await loadChain(chain, address, indexer)
-        return { chainId: chain.id, rows, message: null }
-      } catch (error) {
-        return {
-          chainId: chain.id,
-          rows: [] as NormalizedTransaction[],
-          message: error instanceof Error ? error.message : "Chain sync failed.",
-        }
+  const settled = await mapPool(chains, 4, async (chain) => {
+    try {
+      const rows = await loadChain(chain, address, indexer)
+      return { chainId: chain.id, rows, message: null }
+    } catch (error) {
+      return {
+        chainId: chain.id,
+        rows: [] as NormalizedTransaction[],
+        message: error instanceof Error ? error.message : "Chain sync failed.",
       }
-    }),
-  )
+    }
+  })
   const fetched: NormalizedTransaction[] = []
   for (const result of settled) {
     if (result.message) errors.push({ chainId: result.chainId, message: result.message })
@@ -148,14 +205,23 @@ export async function syncWallet(input: unknown): Promise<SyncWalletResult> {
     )
   }
 
+  const markets = await nativeMarkets(chains, fetched)
   const enriched = await mapPool(fetched, 4, (tx) => {
     const chain = chains.find((item) => item.id === tx.chainId)!
-    return enrichTransaction(chain, address, tx, indexer)
+    const marketNativeUsd = chain.nativePriceId
+      ? markets.get(`${tx.chainId}:${tx.hash}:${chain.nativePriceId}`) ?? null
+      : null
+    return enrichTransaction(chain, address, tx, indexer, marketNativeUsd)
   })
-  const transactions = enriched.map((item) => item.row)
-  if (enriched.some((item) => item.priceSource === "reference")) {
+  let transactions = enriched.map((item) => item.row)
+  try {
+    transactions = await applySpamFlags(transactions)
+  } catch {
+    warnings.push("Spam screening did not finish. Detected tokens stay visible.")
+  }
+  if (enriched.some((item) => item.priceSource === "unpriced")) {
     warnings.push(
-      "At least one gas figure uses the reference native USD rate because the indexer had no quote.",
+      "At least one gas figure is unpriced because DefiLlama had no native quote at that timestamp.",
     )
   }
 

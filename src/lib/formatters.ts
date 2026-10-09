@@ -1,3 +1,4 @@
+import { chainLabel } from "@/lib/chains"
 import { formatUnits } from "viem"
 
 const usdFormatter = new Intl.NumberFormat("en-US", {
@@ -22,14 +23,6 @@ const MONTHS = [
   "Dec",
 ] as const
 
-const CHAIN_NAMES: Record<number, string> = {
-  1: "Ethereum",
-  10: "Optimism",
-  137: "Polygon",
-  8453: "Base",
-  42161: "Arbitrum",
-}
-
 export function formatUsd(value: number, options?: { signed?: boolean }) {
   const formatted = usdFormatter.format(value)
   if (options?.signed && value > 0) return `+${formatted}`
@@ -37,7 +30,14 @@ export function formatUsd(value: number, options?: { signed?: boolean }) {
 }
 
 export function formatChain(chainId: number) {
-  return CHAIN_NAMES[chainId] ?? `Chain ${chainId}`
+  return chainLabel(chainId) ?? `Chain ${chainId}`
+}
+
+export function formatEth(value: number) {
+  const formatted = new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 6,
+  }).format(value)
+  return `${formatted} ETH`
 }
 
 export function shortenAddress(address: string, chars = 4) {

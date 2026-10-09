@@ -29,7 +29,7 @@ export function Sidebar({
           <p className="text-sm font-semibold tracking-tight text-zinc-50">
             Proofit
           </p>
-          <p className="text-[11px] text-zinc-500">Read-only desk</p>
+          <p className="text-[11px] text-zinc-500">Phase 1 desk</p>
         </div>
       </div>
 

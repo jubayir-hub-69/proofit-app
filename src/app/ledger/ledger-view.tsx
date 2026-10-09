@@ -1,13 +1,17 @@
 "use client"
 
 import { useState } from "react"
+import { LegalDisclaimer } from "@/components/legal-disclaimer"
 import { PageHeader } from "@/components/layout/page-header"
+import { OpportunityCost } from "@/components/ledger/opportunity-cost"
+import { SpamToggle } from "@/components/ledger/spam-toggle"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { useFilteredLedger } from "@/hooks/use-filtered-ledger"
 import { useLedgerBook, useRefreshLedger } from "@/hooks/use-ledger-book"
 import { useSyncStatus } from "@/hooks/use-wallet-sync"
 import { useWatchAddress } from "@/hooks/use-watch-address"
-import { isUnclassified, netImpactUsd, protocolLabel } from "@/lib/book"
+import { isSpamTransaction, isUnclassified, netImpactUsd, protocolLabel } from "@/lib/book"
 import { downloadCsv, toCsv } from "@/lib/csv"
 import { formatChain, formatTimestamp, formatUsd } from "@/lib/formatters"
 import { DB_TRANSACTION_TYPES, type DbTransactionType, type TransactionRow } from "@/types/database"
@@ -24,9 +28,11 @@ export function LedgerView() {
   const book = useLedgerBook(address, ready)
   const waiting = Boolean(address) && !status.error && (!ready || book.isLoading)
   const data = book.data
+  const { hideSpam, setHideSpam, view } = useFilteredLedger(data, address)
+  const summary = view?.report.summary
 
   function exportCsv() {
-    if (!data || !address) return
+    if (!data || !view || !address) return
     const header = [
       "Date/Time",
       "Chain",
@@ -36,7 +42,7 @@ export function LedgerView() {
       "Claimed Value (USD)",
       "Net Impact (USD)",
     ]
-    const rows = data.transactions.map((transaction) => [
+    const rows = view.transactions.map((transaction) => [
       formatTimestamp(transaction.block_timestamp),
       formatChain(transaction.chain_id),
       protocolLabel(transaction, data.catalog),
@@ -53,12 +59,12 @@ export function LedgerView() {
       <PageHeader
         eyebrow="Book"
         title="Net Ledger"
-        description="Indexed transactions on Base, Arbitrum, and Polygon. Net impact is claimed value minus gas."
+        description="Indexed transactions across the EVM registry. Net impact is claimed value minus gas."
         action={
           <Button
             type="button"
             variant="outline"
-            disabled={!data || data.transactions.length === 0}
+            disabled={!view || view.transactions.length === 0}
             onClick={exportCsv}
           >
             Export CSV
@@ -87,8 +93,18 @@ export function LedgerView() {
 
       {book.error ? <p className="text-sm text-rose-300">{book.error.message}</p> : null}
 
-      {data && address && !waiting ? (
+      {data && view && summary && address && !waiting ? (
         <>
+          <div className="mb-4">
+            <SpamToggle
+              checked={hideSpam}
+              hiddenCount={view.hiddenCount}
+              onChange={setHideSpam}
+            />
+            <p className="mt-1 text-xs text-zinc-500">
+              Hide Spam & Dust Tokens changes these ledger totals only. It does not remove genuine holdings.
+            </p>
+          </div>
           {status.warnings.length > 0 || status.errors.length > 0 ? (
             <ul className="mb-4 space-y-1 text-xs text-zinc-500">
               {[...status.errors, ...status.warnings].map((item, index) => (
@@ -97,21 +113,29 @@ export function LedgerView() {
             </ul>
           ) : null}
 
-          <dl className="mb-5 grid gap-3 sm:grid-cols-3">
+          <dl className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-xl border border-white/10 bg-zinc-900/70 px-4 py-3">
               <dt className="text-[11px] tracking-[0.14em] text-zinc-500 uppercase">
                 Net ROI
               </dt>
               <dd className="mt-1 font-mono text-lg text-emerald-300 tabular-nums">
-                {formatUsd(data.summary.netRoiUsd, { signed: true })}
+                {formatUsd(summary.netRoiUsd, { signed: true })}
               </dd>
             </div>
             <div className="rounded-xl border border-white/10 bg-zinc-900/70 px-4 py-3">
               <dt className="text-[11px] tracking-[0.14em] text-zinc-500 uppercase">
-                Gas spent
+                Total Claimed
               </dt>
               <dd className="mt-1 font-mono text-lg text-zinc-50 tabular-nums">
-                {formatUsd(data.summary.gasSpentUsd)}
+                {formatUsd(summary.valueUsd)}
+              </dd>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-zinc-900/70 px-4 py-3">
+              <dt className="text-[11px] tracking-[0.14em] text-zinc-500 uppercase">
+                Total Gas
+              </dt>
+              <dd className="mt-1 font-mono text-lg text-zinc-50 tabular-nums">
+                {formatUsd(summary.gasSpentUsd)}
               </dd>
             </div>
             <div className="rounded-xl border border-white/10 bg-zinc-900/70 px-4 py-3">
@@ -119,10 +143,15 @@ export function LedgerView() {
                 Events
               </dt>
               <dd className="mt-1 font-mono text-lg text-zinc-50 tabular-nums">
-                {data.summary.transactionCount}
+                {summary.transactionCount}
               </dd>
             </div>
           </dl>
+
+          <section className="mb-5">
+            <h2 className="mb-3 text-sm font-medium text-zinc-100">Ledger / Performance</h2>
+            <OpportunityCost summary={view.opportunity} />
+          </section>
 
           <div className="overflow-x-auto rounded-xl border border-white/10">
             <table className="w-full min-w-[980px] text-left text-sm">
@@ -139,14 +168,16 @@ export function LedgerView() {
                 </tr>
               </thead>
               <tbody>
-                {data.transactions.length === 0 ? (
+                {view.transactions.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="px-4 py-8 text-sm text-zinc-500">
-                      No logs named this wallet in the current sync window.
+                      {hideSpam && data.transactions.length > 0
+                        ? "Spam and dust transfers are hidden. Uncheck the filter to see them."
+                        : "No logs named this wallet in the current sync window."}
                     </td>
                   </tr>
                 ) : (
-                  data.transactions.map((transaction) => {
+                  view.transactions.map((transaction) => {
                     const net = netImpactUsd(transaction)
                     return (
                       <tr key={transaction.id} className="border-t border-white/5 align-top">
@@ -168,7 +199,12 @@ export function LedgerView() {
                           )}
                         </td>
                         <td className="px-4 py-3">
-                          <Badge>{transactionKindLabel[transaction.type]}</Badge>
+                          <span className="flex flex-wrap items-center gap-1.5">
+                            <Badge>{transactionKindLabel[transaction.type]}</Badge>
+                            {isSpamTransaction(transaction) ? (
+                              <Badge tone="warning">Spam</Badge>
+                            ) : null}
+                          </span>
                         </td>
                         <td className="px-4 py-3 text-right font-mono text-zinc-300 tabular-nums">
                           {formatUsd(transaction.gas_fee_usd)}
@@ -192,6 +228,7 @@ export function LedgerView() {
           </div>
         </>
       ) : null}
+      <LegalDisclaimer />
     </div>
   )
 }

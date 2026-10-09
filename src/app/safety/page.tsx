@@ -8,7 +8,9 @@ export const metadata: Metadata = {
 export default function SafetyPage() {
   return (
     <SafetyView
-      goplusConfigured={Boolean(process.env.NEXT_PUBLIC_GOPLUS_API_KEY)}
+      goplusConfigured={Boolean(
+        process.env.GOPLUS_APP_KEY && process.env.GOPLUS_APP_SECRET,
+      )}
     />
   )
 }

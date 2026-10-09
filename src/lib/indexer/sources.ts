@@ -1,5 +1,5 @@
 import { ApiError, covalentHeaders, fetchJson } from "@/lib/api"
-import { alchemyHttpUrl } from "@/lib/web3/config"
+import { alchemyHttpUrl } from "@/lib/alchemy"
 import type { SyncChain } from "@/lib/indexer/chains"
 import type { IndexerName, NormalizedTransaction } from "@/lib/indexer/types"
 
@@ -12,7 +12,7 @@ export function txLimit() {
 
 export function selectIndexerSource(): IndexerName {
   if (process.env.NEXT_PUBLIC_COVALENT_API_KEY?.trim()) return "covalent"
-  if (process.env.NEXT_PUBLIC_ALCHEMY_KEY?.trim()) return "alchemy"
+  if (process.env.ALCHEMY_API_KEY?.trim()) return "alchemy"
   return "public"
 }
 
@@ -50,6 +50,9 @@ export async function fetchCovalentTransactions(
   chain: SyncChain,
   address: string,
 ): Promise<NormalizedTransaction[]> {
+  if (!chain.covalentName) {
+    throw new Error(`Covalent is not configured for ${chain.name}.`)
+  }
   const url = `${COVALENT_BASE}/${chain.covalentName}/address/${address}/transactions_v3/?quote-currency=USD`
   let payload: unknown
   try {

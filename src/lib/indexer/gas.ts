@@ -1,16 +1,6 @@
 import { formatUnits } from "viem"
 
-export type GasPriceSource = "receipt" | "provider" | "reference"
-
-/**
- * Fallback USD per 1 native token when neither Covalent nor the receipt
- * path has a quote. These are not a live oracle.
- */
-export const REFERENCE_NATIVE_USD: Record<number, number> = {
-  8453: 2500,
-  42161: 2500,
-  137: 0.5,
-}
+export type GasPriceSource = "receipt" | "provider" | "market" | "unpriced"
 
 export function roundUsd(value: number) {
   if (!Number.isFinite(value)) return 0
