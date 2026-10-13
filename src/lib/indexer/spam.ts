@@ -1,5 +1,5 @@
-import { goplusTokenSecurityUrl, fetchJson } from "@/lib/api"
-import { goplusAuthHeaders } from "@/lib/goplus-auth"
+import { goplusTokenSecurityUrl } from "@/lib/api"
+import { goplusFetch } from "@/lib/goplus-auth"
 import { getEvmChain } from "@/lib/chains"
 import { lookupCurrentPrices } from "@/lib/defillama"
 import { rawRecord } from "@/lib/book"
@@ -93,14 +93,12 @@ async function goplusByChain(chainId: number, addresses: readonly string[]) {
   const found = new Map<string, Record<string, unknown>>()
   await mapPool(chunks(addresses, 20), 3, async (group) => {
     try {
-      const body = await fetchJson<{
+      const loaded = await goplusFetch<{
         code?: number | string
+        message?: string
         result?: Record<string, unknown>
-      }>(goplusTokenSecurityUrl(chainId, group.join(",")), {
-        headers: await goplusAuthHeaders(),
-        cache: "no-store",
-        signal: AbortSignal.timeout(12_000),
-      })
+      }>(goplusTokenSecurityUrl(chainId, group.join(",")))
+      const body = loaded.body
       if (Number(body.code) !== 1 || !body.result) return
       for (const [key, value] of Object.entries(body.result)) {
         if (value && typeof value === "object" && !Array.isArray(value)) {

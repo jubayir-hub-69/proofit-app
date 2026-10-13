@@ -44,6 +44,9 @@ export function ChecklistView() {
       {waiting ? (
         <p className="text-sm text-zinc-400">Indexing on-chain transactions...</p>
       ) : null}
+      {book.data && !waiting && book.data.transactions.length === 0 ? (
+        <p className="mb-4 text-sm text-zinc-400">No transactions found.</p>
+      ) : null}
 
       {book.data && !waiting ? (
         <ul className="overflow-hidden rounded-xl border border-white/10">

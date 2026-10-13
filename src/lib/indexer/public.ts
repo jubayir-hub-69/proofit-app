@@ -73,7 +73,7 @@ function isRangeError(text: string) {
 function clientFor(chain: SyncChain, url: string) {
   return createPublicClient({
     chain: chain.chain,
-    transport: http(url, { timeout: 20_000, retryCount: 0 }),
+    transport: http(url, { timeout: 8_000, retryCount: 0 }),
   })
 }
 
@@ -210,6 +210,57 @@ async function scanUrl(chain: SyncChain, wallet: Address, url: string) {
   return rows
 }
 
+const RECENT_BLOCKS = 32
+
+async function scanRecentBlocks(chain: SyncChain, wallet: Address, url: string) {
+  const client = clientFor(chain, url)
+  const latest = await client.getBlockNumber()
+  const span = BigInt(RECENT_BLOCKS)
+  const start = latest > span ? latest - span : BigInt(0)
+  const numbers: bigint[] = []
+  for (let number = latest; number >= start; number -= BigInt(1)) numbers.push(number)
+  const rows: NormalizedTransaction[] = []
+  const seen = new Set<string>()
+  const target = wallet.toLowerCase()
+  const limit = txLimit()
+  let cursor = 0
+  async function worker() {
+    while (cursor < numbers.length && rows.length < limit) {
+      const blockNumber = numbers[cursor]
+      cursor += 1
+      if (blockNumber === undefined) return
+      const block = await client.getBlock({ blockNumber, includeTransactions: true })
+      const timestamp = new Date(Number(block.timestamp) * 1000).toISOString()
+      for (const tx of block.transactions) {
+        if (typeof tx === "string" || rows.length >= limit) continue
+        const from = tx.from.toLowerCase()
+        const to = tx.to?.toLowerCase() ?? ""
+        if (from !== target && to !== target) continue
+        const key = tx.hash.toLowerCase()
+        if (seen.has(key)) continue
+        seen.add(key)
+        rows.push({
+          hash: tx.hash,
+          chainId: chain.id,
+          from: tx.from,
+          to: tx.to,
+          blockTimestamp: timestamp,
+          input: tx.input,
+          logAddresses: [],
+          topics: [],
+          notionalUsd: null,
+          quoteRate: null,
+          providerGasUsd: null,
+        })
+      }
+    }
+  }
+  const workers = Math.min(4, numbers.length)
+  if (workers > 0) await Promise.all(Array.from({ length: workers }, () => worker()))
+  rememberPublicRpc(chain.id, url)
+  return rows.slice(0, limit)
+}
+
 export async function fetchPublicTransactions(
   chain: SyncChain,
   address: Address,
@@ -224,6 +275,11 @@ export async function fetchPublicTransactions(
       return await scanUrl(chain, address, url)
     } catch (error) {
       lastReason = errorText(error).replace(/https?:\/\/\S+/g, "").slice(0, 180).trim()
+      try {
+        return await scanRecentBlocks(chain, address, url)
+      } catch {
+        // The next public endpoint is tried below.
+      }
     }
   }
   throw new Error(

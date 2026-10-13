@@ -1,7 +1,3 @@
-export const PORTFOLIO_CHAIN_IDS = [1, 56, 42161, 8453, 137] as const
-
-export type PortfolioChainId = (typeof PORTFOLIO_CHAIN_IDS)[number]
-
 export type PriceStatus = "priced" | "unlisted" | "unavailable"
 
 export type NetWorthStatus = "empty" | "complete" | "partial" | "unlisted" | "unavailable"

@@ -59,6 +59,9 @@ export function CampaignsView() {
       {waiting ? (
         <p className="text-sm text-zinc-400">Indexing on-chain transactions...</p>
       ) : null}
+      {data && !waiting && data.transactions.length === 0 ? (
+        <p className="mb-4 text-sm text-zinc-400">No transactions found.</p>
+      ) : null}
 
       {data && !waiting ? (
         <ul className="space-y-3">

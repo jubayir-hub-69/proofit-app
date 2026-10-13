@@ -1,5 +1,5 @@
-import { fetchJson, goplusPhishingSiteUrl, goplusTokenSecurityUrl } from "@/lib/api"
-import { goplusAuthHeaders, goplusConfigured } from "@/lib/goplus-auth"
+import { goplusPhishingSiteUrl, goplusTokenSecurityUrl } from "@/lib/api"
+import { goplusFetch } from "@/lib/goplus-auth"
 import { getEvmChain } from "@/lib/chains"
 import { assessPhishing, assessToken, riskLabel, worstLevel } from "@/lib/safety/risk"
 import type { SafetyCheck, SafetyScanResponse } from "@/lib/safety/types"
@@ -28,32 +28,8 @@ const PUBLIC_FALLBACK_NOTICE =
   "The configured GoPlus key was rejected, so this result used the public endpoint."
 
 async function goplusGet(url: string) {
-  const configured = goplusConfigured()
-  const headers = await goplusAuthHeaders()
-  const authed = Boolean(
-    headers && typeof headers === "object" && !Array.isArray(headers) && "Authorization" in headers,
-  )
-  if (configured && !authed) {
-    const body = await fetchJson<GoPlusBody>(url, {
-      headers: { Accept: "application/json" },
-      cache: "no-store",
-      signal: AbortSignal.timeout(12_000),
-    })
-    return { body, fallback: true }
-  }
-  const body = await fetchJson<GoPlusBody>(url, {
-    headers,
-    cache: "no-store",
-    signal: AbortSignal.timeout(12_000),
-  })
-  const rejected = `${body.message ?? ""}`.toLowerCase().includes("signature")
-  if (!authed || !rejected || goplusOk(body)) return { body, fallback: false }
-  const retry = await fetchJson<GoPlusBody>(url, {
-    headers: { Accept: "application/json" },
-    cache: "no-store",
-    signal: AbortSignal.timeout(12_000),
-  })
-  return { body: retry, fallback: true }
+  const loaded = await goplusFetch<GoPlusBody>(url)
+  return { body: loaded.body, fallback: loaded.usedPublic }
 }
 
 function tokenRecord(result: unknown, address: string) {

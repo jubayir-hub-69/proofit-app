@@ -49,7 +49,7 @@ export function goplusPhishingSiteUrl(target: string) {
   return url.toString()
 }
 
-/** Public GoPlus headers. Access tokens are attached in server-only `goplusAuthHeaders`. */
+/** Public GoPlus headers. Access tokens are attached by server-only `goplusFetch`. */
 export function goplusHeaders(): HeadersInit {
   return { Accept: "application/json" }
 }

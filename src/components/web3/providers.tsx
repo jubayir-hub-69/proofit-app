@@ -30,6 +30,8 @@ export function AppProviders({ children }: { children: ReactNode }) {
   const queryClient = getQueryClient()
   const [mounted, setMounted] = useState(false)
 
+  if (typeof window !== "undefined") enableInjectedProviderReads()
+
   useEffect(() => {
     enableInjectedProviderReads()
     setMounted(true)

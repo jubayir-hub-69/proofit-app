@@ -69,37 +69,49 @@ export function useWalletSync() {
               chains: SYNC_CHAINS.map((chain) => chain.id),
             }),
           })
-          const body = (await response.json()) as {
+          let body: {
             ok?: boolean
             error?: string
             imported?: number
             warnings?: string[]
             errors?: { message?: string }[]
+          } = {}
+          try {
+            body = (await response.json()) as typeof body
+          } catch {
+            body = {}
           }
-          if (!response.ok || !body.ok) {
-            throw new Error(body.error || "Sync failed.")
+          if (response.status === 400) {
+            throw new Error(body.error || "Enter a valid EVM address.")
           }
           await queryClient.invalidateQueries({ queryKey: ["ledger", address] })
+          const imported = body.ok === false ? 0 : (body.imported ?? 0)
           emit({
             address,
             pending: false,
             settled: true,
             error: null,
-            imported: body.imported ?? 0,
+            imported,
             warnings: Array.isArray(body.warnings) ? body.warnings : [],
-            errors: Array.isArray(body.errors)
-              ? body.errors.flatMap((item) =>
-                  item.message ? [item.message] : [],
-                )
-              : [],
+            errors:
+              body.ok === false
+                ? []
+                : Array.isArray(body.errors)
+                  ? body.errors.flatMap((item) => (item.message ? [item.message] : []))
+                  : [],
           })
         } catch (error) {
+          const message = error instanceof Error ? error.message : ""
+          const inputError = /address|chain|json|body must/i.test(message)
+          if (!inputError) {
+            await queryClient.invalidateQueries({ queryKey: ["ledger", address] })
+          }
           emit({
             address,
             pending: false,
             settled: true,
-            error: error instanceof Error ? error.message : "Sync failed.",
-            imported: null,
+            error: inputError ? message : null,
+            imported: inputError ? null : 0,
             warnings: [],
             errors: [],
           })

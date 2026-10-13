@@ -1,9 +1,8 @@
 import { alchemyHttpUrl, getServerRpcClient, redactRpcSecrets } from "@/lib/alchemy"
-import { getEvmChain } from "@/lib/chains"
+import { EVM_CHAINS, getEvmChain } from "@/lib/chains"
 import { lookupCurrentPrices } from "@/lib/defillama"
 import { formatTokenAmount } from "@/lib/formatters"
 import {
-  PORTFOLIO_CHAIN_IDS,
   type NetWorthStatus,
   type PortfolioChain,
   type PortfolioHolding,
@@ -39,6 +38,11 @@ interface DiscoveredToken {
 function safeError(error: unknown, fallback: string) {
   const text = redactRpcSecrets(error instanceof Error ? error.message : fallback)
   return text.length > 280 ? `${text.slice(0, 280)}…` : text
+}
+
+/** Alchemy is optional on a network. A missing key is not a failed balance read. */
+function skippedTokenScan(message: string) {
+  return /not enabled|not configured|were not scanned|ALCHEMY_API_KEY/i.test(message)
 }
 
 async function alchemyRpc<T>(chainId: number, method: string, params: unknown[]): Promise<T> {
@@ -322,6 +326,7 @@ async function scanChain(chainId: number, owner: Address): Promise<{
   }
 
   const errors = [nativeError, tokenError].filter((item): item is string => Boolean(item))
+  const visibleErrors = errors.filter((item) => !skippedTokenScan(item))
   if (!nativeOk && !tokenOk) {
     return {
       chain: {
@@ -329,7 +334,7 @@ async function scanChain(chainId: number, owner: Address): Promise<{
         network,
         ok: false,
         holdingCount: 0,
-        error: errors.join(" ") || "Balance scan failed.",
+        error: visibleErrors.join(" ") || errors.join(" ") || "Balance scan failed.",
       },
       holdings: [],
       notice: null,
@@ -342,7 +347,7 @@ async function scanChain(chainId: number, owner: Address): Promise<{
       network,
       ok: nativeOk || tokenOk,
       holdingCount: holdings.length,
-      error: errors.length > 0 ? errors.join(" ") : null,
+      error: visibleErrors.length > 0 ? visibleErrors.join(" ") : null,
     },
     holdings,
     notice: notes.length > 0 ? notes.join(" ") : null,
@@ -419,7 +424,7 @@ function netWorth(holdings: PortfolioHolding[], chains: PortfolioChain[]) {
 }
 
 function sortHoldings(holdings: PortfolioHolding[]) {
-  const order = new Map<number, number>(PORTFOLIO_CHAIN_IDS.map((id, index) => [id, index]))
+  const order = new Map<number, number>(EVM_CHAINS.map((chain, index) => [chain.id, index]))
   return [...holdings].sort((left, right) => {
     const chainDiff = (order.get(left.chainId) ?? 99) - (order.get(right.chainId) ?? 99)
     if (chainDiff !== 0) return chainDiff
@@ -433,26 +438,23 @@ function sortHoldings(holdings: PortfolioHolding[]) {
 }
 
 export async function loadPortfolio(address: Address): Promise<PortfolioResponse> {
-  const scans = await Promise.all(
-    PORTFOLIO_CHAIN_IDS.map(async (chainId) => {
-      try {
-        return await scanChain(chainId, address)
-      } catch (error) {
-        const entry = getEvmChain(chainId)
-        return {
-          chain: {
-            chainId,
-            network: entry?.name ?? `Chain ${chainId}`,
-            ok: false,
-            holdingCount: 0,
-            error: safeError(error, "Balance scan failed."),
-          } satisfies PortfolioChain,
-          holdings: [] as PortfolioHolding[],
-          notice: null as string | null,
-        }
+  const scans = await mapPool(EVM_CHAINS, 5, async (chain) => {
+    try {
+      return await scanChain(chain.id, address)
+    } catch (error) {
+      return {
+        chain: {
+          chainId: chain.id,
+          network: chain.name,
+          ok: false,
+          holdingCount: 0,
+          error: safeError(error, "Balance scan failed."),
+        } satisfies PortfolioChain,
+        holdings: [] as PortfolioHolding[],
+        notice: null as string | null,
       }
-    }),
-  )
+    }
+  })
 
   const holdings = scans.flatMap((scan) => scan.holdings)
   const ids = [

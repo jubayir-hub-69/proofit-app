@@ -181,6 +181,18 @@ function keepManualTag(existing: TransactionRow, incoming: TransactionRow): Tran
   }
 }
 
+/** Keeps the latest index in process memory when the remote write is unavailable. */
+export function rememberIndexed(wallet: WalletRow, transactions: TransactionRow[]) {
+  for (const campaign of SEED_CAMPAIGNS) {
+    const store = memoryStore()
+    if (!store.campaigns.some((row) => row.id === campaign.id)) {
+      store.campaigns.push({ ...campaign })
+    }
+  }
+  upsertWallet(wallet)
+  upsertTransactions(transactions)
+}
+
 export function upsertTransactions(rows: TransactionRow[]) {
   const store = memoryStore()
   for (const row of rows) {
@@ -339,9 +351,9 @@ export async function persistTransactions(rows: TransactionRow[]) {
     upsertTransactions(rows)
     return
   }
-  const quoted = rows.map((row) => `"${row.id}"`).join(",")
+  const list = rows.map((row) => row.id).join(",")
   const existing = await supabaseFetch<TransactionRow[]>(
-    `transactions?select=*&id=in.(${quoted})`,
+    `transactions?select=*&id=in.(${list})`,
   )
   const previous = new Map(existing.map((row) => [row.id, row]))
   const merged = rows.map((row) => {
@@ -470,30 +482,37 @@ async function supabasePatch<T>(path: string, body: unknown): Promise<T> {
 
 export async function loadStore(address?: string): Promise<ProofStore> {
   await ensureStore()
-  if (!supabaseConfig()) return readMemory(address)
+  const local = readMemory(address)
+  if (!supabaseConfig()) return local
 
-  const walletFilter = address
-    ? `&wallet_address=eq.${encodeURIComponent(address)}`
-    : ""
-  const [wallets, campaigns, transactions, checklist] = await Promise.all([
-    supabaseFetch<WalletRow[]>(
-      address
-        ? `wallets?select=*&address=eq.${encodeURIComponent(address)}`
-        : "wallets?select=*",
-    ),
-    supabaseFetch<CampaignRow[]>("campaigns?select=*"),
-    supabaseFetch<TransactionRow[]>(`transactions?select=*${walletFilter}`),
-    supabaseFetch<CampaignChecklistRow[]>(
-      address
-        ? `campaign_checklist?select=*&or=(wallet_address.is.null,wallet_address.eq.${encodeURIComponent(address)})`
-        : "campaign_checklist?select=*",
-    ),
-  ])
+  try {
+    const walletFilter = address
+      ? `&wallet_address=eq.${encodeURIComponent(address)}`
+      : ""
+    const [wallets, campaigns, transactions, checklist] = await Promise.all([
+      supabaseFetch<WalletRow[]>(
+        address
+          ? `wallets?select=*&address=eq.${encodeURIComponent(address)}`
+          : "wallets?select=*",
+      ),
+      supabaseFetch<CampaignRow[]>("campaigns?select=*"),
+      supabaseFetch<TransactionRow[]>(`transactions?select=*${walletFilter}`),
+      supabaseFetch<CampaignChecklistRow[]>(
+        address
+          ? `campaign_checklist?select=*&or=(wallet_address.is.null,wallet_address.eq.${encodeURIComponent(address)})`
+          : "campaign_checklist?select=*",
+      ),
+    ])
 
-  return {
-    wallets,
-    campaigns,
-    transactions,
-    campaign_checklist: checklist,
+    return {
+      wallets: wallets.length > 0 ? wallets : local.wallets,
+      campaigns: campaigns.length > 0 ? campaigns : local.campaigns,
+      transactions: local.transactions.length > transactions.length ? local.transactions : transactions,
+      campaign_checklist:
+        local.campaign_checklist.length > checklist.length ? local.campaign_checklist : checklist,
+    }
+  } catch (error) {
+    console.error(error)
+    return local
   }
 }

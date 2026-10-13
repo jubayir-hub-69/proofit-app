@@ -113,68 +113,107 @@ interface AlchemyTransfer {
   rawContract?: { address?: string | null }
 }
 
+class AlchemyHistoryError extends Error {
+  readonly retryCategory: boolean
+
+  constructor(message: string, retryCategory: boolean) {
+    super(message)
+    this.name = "AlchemyHistoryError"
+    this.retryCategory = retryCategory
+  }
+}
+
+const TRANSFER_CATEGORIES = [
+  ["external", "erc20", "erc721", "erc1155"],
+  ["external", "erc20"],
+  ["erc20"],
+  ["external"],
+] as const
+
 async function alchemyRpc<T>(chain: SyncChain, method: string, params: unknown[]) {
   const url = alchemyHttpUrl(chain.id)
   if (!url) {
-    throw new Error(`Alchemy is not configured for ${chain.name}.`)
+    throw new AlchemyHistoryError(`Alchemy is not configured for ${chain.name}.`, false)
   }
-  let payload: { result?: T; error?: { message?: string } }
+  let response: Response
   try {
-    payload = await fetchJson(url, {
+    response = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
       cache: "no-store",
-      signal: AbortSignal.timeout(12_000),
+      signal: AbortSignal.timeout(8_000),
     })
-  } catch (error) {
-    const status = error instanceof ApiError ? error.status : 0
-    throw new Error(
-      status
-        ? `Alchemy history failed (${status}) on ${chain.name}.`
-        : `Alchemy history failed on ${chain.name}.`,
+  } catch {
+    throw new AlchemyHistoryError(`Alchemy history failed on ${chain.name}.`, false)
+  }
+  let payload: { result?: T; error?: { message?: string; code?: number } } | null = null
+  try {
+    payload = (await response.json()) as { result?: T; error?: { message?: string; code?: number } }
+  } catch {
+    payload = null
+  }
+  if (!response.ok || payload?.error) {
+    const detail = payload?.error?.message ?? ""
+    const retryCategory =
+      response.status === 400 ||
+      /categor|param|unsupported|invalid/i.test(detail)
+    const suffix = retryCategory ? " Unsupported transfer category." : ""
+    throw new AlchemyHistoryError(
+      `Alchemy history failed (${response.status || "error"}) on ${chain.name}.${suffix}`,
+      retryCategory && response.status !== 401 && response.status !== 403,
     )
   }
-  if (payload.error) {
-    throw new Error(
-      payload.error.message
-        ? `Alchemy history failed on ${chain.name}.`
-        : `Alchemy history failed on ${chain.name}.`,
-    )
-  }
-  return payload.result
+  return payload?.result
 }
 
 async function alchemyTransfers(chain: SyncChain, address: string, field: "fromAddress" | "toAddress") {
-  const result = await alchemyRpc<{ transfers?: AlchemyTransfer[] }>(
-    chain,
-    "alchemy_getAssetTransfers",
-    [
-      {
-        fromBlock: "0x0",
-        toBlock: "latest",
-        [field]: address,
-        category: ["external", "erc20", "erc721", "erc1155"],
-        withMetadata: true,
-        maxCount: "0x19",
-        order: "desc",
-      },
-    ],
-  )
-  return result?.transfers ?? []
+  let last: Error | null = null
+  for (const category of TRANSFER_CATEGORIES) {
+    try {
+      const result = await alchemyRpc<{ transfers?: AlchemyTransfer[] }>(
+        chain,
+        "alchemy_getAssetTransfers",
+        [
+          {
+            fromBlock: "0x0",
+            toBlock: "latest",
+            [field]: address,
+            category: [...category],
+            withMetadata: true,
+            excludeZeroValue: false,
+            maxCount: "0x19",
+            order: "desc",
+          },
+        ],
+      )
+      return result?.transfers ?? []
+    } catch (error) {
+      last = error instanceof Error ? error : new Error(`Alchemy history failed on ${chain.name}.`)
+      if (!(error instanceof AlchemyHistoryError) || !error.retryCategory) break
+    }
+  }
+  throw last ?? new Error(`Alchemy history failed on ${chain.name}.`)
 }
 
 export async function fetchAlchemyTransactions(
   chain: SyncChain,
   address: string,
 ): Promise<NormalizedTransaction[]> {
-  const [outgoing, incoming] = await Promise.all([
+  const [outgoing, incoming] = await Promise.allSettled([
     alchemyTransfers(chain, address, "fromAddress"),
     alchemyTransfers(chain, address, "toAddress"),
   ])
+  if (outgoing.status === "rejected" && incoming.status === "rejected") {
+    throw outgoing.reason instanceof Error
+      ? outgoing.reason
+      : new Error(`Alchemy history failed on ${chain.name}.`)
+  }
+  const outgoingRows = outgoing.status === "fulfilled" ? outgoing.value : []
+  const incomingRows = incoming.status === "fulfilled" ? incoming.value : []
   const grouped = new Map<string, NormalizedTransaction>()
 
-  for (const transfer of [...outgoing, ...incoming]) {
+  for (const transfer of [...outgoingRows, ...incomingRows]) {
     const hash = asHash(transfer.hash)
     const timestamp = asString(transfer.metadata?.blockTimestamp)
     if (!hash || !timestamp) continue

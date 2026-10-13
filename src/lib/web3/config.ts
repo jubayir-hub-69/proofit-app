@@ -15,18 +15,18 @@ export const wagmiConfig = createConfig({
   connectors: [
     injected({
       shimDisconnect: false,
-      unstable_shimAsyncInject: false,
+      unstable_shimAsyncInject: 1_500,
       target() {
         const provider = readInjectedProvider()
         if (!provider) return undefined
-        return { id: "injected", name: "Injected", provider }
+        return { id: "injected", name: "Browser Wallet", provider }
       },
     }),
   ],
   transports: Object.fromEntries(
     EVM_CHAINS.map((item) => [item.id, http(getRpcUrl(item.id))]),
   ) as Record<(typeof primary | (typeof others)[number])["id"], ReturnType<typeof http>>,
-  multiInjectedProviderDiscovery: false,
+  multiInjectedProviderDiscovery: true,
   // Hydrate calls `store.persist.rehydrate()` when `ssr` is set. A null storage
   // leaves `persist` undefined and throws reading `rehydrate`. This store is a no-op.
   storage: createStorage({ storage: noopStorage }),

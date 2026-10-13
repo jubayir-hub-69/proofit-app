@@ -40,6 +40,15 @@ function errorMessage(error: unknown) {
   return message.length > 300 ? `${message.slice(0, 300)}…` : message
 }
 
+function browserConnector<T extends { id: string; type: string }>(connectors: readonly T[]) {
+  return (
+    connectors.find((item) => item.type === "injected" && item.id !== "injected") ??
+    connectors.find((item) => item.id === "injected") ??
+    connectors.find((item) => item.type === "injected") ??
+    connectors[0]
+  )
+}
+
 function allowanceLabel(row: ApprovalRow) {
   if (row.unlimited) return "Unlimited"
   if (row.decimals === null) return row.allowanceRaw
@@ -69,7 +78,6 @@ export function SafetyView({ goplusConfigured }: { goplusConfigured: boolean }) 
   const [revokeError, setRevokeError] = useState<string | null>(null)
   const [revokeHash, setRevokeHash] = useState<string | null>(null)
 
-  const connector = connectors.find((item) => item.type === "injected") ?? connectors[0]
   const connectedAddress = connection.address
   const sameWallet = Boolean(
     address && connectedAddress && getAddress(connectedAddress) === address,
@@ -134,15 +142,19 @@ export function SafetyView({ goplusConfigured }: { goplusConfigured: boolean }) 
     }
   }
 
+  async function connectWallet() {
+    const connector = browserConnector(connectors)
+    if (!connector) {
+      throw new Error("No injected wallet is available in this browser.")
+    }
+    return connectAsync({ connector })
+  }
+
   async function revoke(row: ApprovalRow) {
     const key = `${row.chainId}:${row.token}:${row.spender}`
     const nextChainId = appChainId(row.chainId)
     if (!address || !nextChainId || !isAddress(row.token) || !isAddress(row.spender)) {
       setRevokeError("This approval cannot be revoked from the current registry.")
-      return
-    }
-    if (!connector) {
-      setRevokeError("No injected wallet is available in this browser.")
       return
     }
     setRevoking(key)
@@ -152,7 +164,7 @@ export function SafetyView({ goplusConfigured }: { goplusConfigured: boolean }) 
       let account = connection.address
       let currentChain = connection.chainId
       if (!connection.isConnected || !account) {
-        const connected = await connectAsync({ connector })
+        const connected = await connectWallet()
         account = connected.accounts[0]
         currentChain = connected.chainId
       }
@@ -163,6 +175,7 @@ export function SafetyView({ goplusConfigured }: { goplusConfigured: boolean }) 
         await switchChainAsync({ chainId: nextChainId })
       }
       const hash = await writeAsync({
+        account: getAddress(account),
         address: getAddress(row.token),
         abi: erc20Abi,
         functionName: "approve",
@@ -279,13 +292,6 @@ export function SafetyView({ goplusConfigured }: { goplusConfigured: boolean }) 
             <Button type="button" variant="outline" onClick={() => void scanAllowances()} disabled={scanningAllowances}>
               {scanningAllowances ? "Scanning…" : "Scan allowances"}
             </Button>
-            {revokeHref ? (
-              <Button variant="outline" asChild>
-                <a href={revokeHref} target="_blank" rel="noreferrer">
-                  Open revoke.cash
-                </a>
-              </Button>
-            ) : null}
           </div>
         </div>
 
@@ -304,16 +310,24 @@ export function SafetyView({ goplusConfigured }: { goplusConfigured: boolean }) 
             type="button"
             variant="secondary"
             className="mt-3"
-            disabled={!connector || connecting}
+            disabled={connecting}
             onClick={() => {
-              if (!connector) return
-              void connectAsync({ connector }).catch((error: unknown) => {
+              void connectWallet().catch((error: unknown) => {
                 setRevokeError(errorMessage(error))
               })
             }}
           >
             {connecting ? "Connecting…" : "Connect wallet"}
           </Button>
+        ) : null}
+        {revokeHref ? (
+          <p className="mt-3 text-sm text-zinc-500">
+            If the wallet cannot submit the revoke,{" "}
+            <a href={revokeHref} target="_blank" rel="noreferrer" className="text-zinc-300 underline">
+              open revoke.cash
+            </a>
+            .
+          </p>
         ) : null}
         {revokeError ? <p className="mt-3 text-sm text-rose-300">{revokeError}</p> : null}
         {revokeHash ? (

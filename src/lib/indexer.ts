@@ -6,6 +6,7 @@ import {
   persistSeedAndWallet,
   persistTransactions,
   persistenceMode,
+  rememberIndexed,
   type Persistence,
 } from "@/lib/db"
 import { historicalPrices, unixSeconds } from "@/lib/defillama"
@@ -110,6 +111,22 @@ function sourceOrder(chain: SyncChain, preferred: IndexerName) {
   return [...new Set(attempts)]
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string) {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms)
+    promise.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error: unknown) => {
+        clearTimeout(timer)
+        reject(error)
+      },
+    )
+  })
+}
+
 async function loadChain(
   chain: SyncChain,
   address: `0x${string}`,
@@ -118,14 +135,44 @@ async function loadChain(
   let last: Error | null = null
   for (const source of sourceOrder(chain, preferred)) {
     try {
-      if (source === "covalent") return await fetchCovalentTransactions(chain, address)
-      if (source === "alchemy") return await fetchAlchemyTransactions(chain, address)
-      return await fetchPublicTransactions(chain, address)
+      const run =
+        source === "covalent"
+          ? fetchCovalentTransactions(chain, address)
+          : source === "alchemy"
+            ? fetchAlchemyTransactions(chain, address)
+            : fetchPublicTransactions(chain, address)
+      return await withTimeout(run, 12_000, `History timed out on ${chain.name}.`)
     } catch (error) {
       last = error instanceof Error ? error : new Error("Chain sync failed.")
     }
   }
   throw last ?? new Error(`No indexer could read ${chain.name}.`)
+}
+
+function plainRow(
+  chain: SyncChain,
+  wallet: `0x${string}`,
+  tx: NormalizedTransaction,
+  indexerName: IndexerName,
+): TransactionRow {
+  return {
+    id: `tx_${chain.id}_${tx.hash}`,
+    wallet_address: wallet,
+    tx_hash: tx.hash,
+    chain_id: chain.id,
+    block_timestamp: tx.blockTimestamp,
+    type: "transfer",
+    gas_fee_usd: 0,
+    value_usd: tx.notionalUsd !== null && tx.notionalUsd > 0 ? tx.notionalUsd : 0,
+    campaign_id: null,
+    raw_data: {
+      indexer: indexerName,
+      from: tx.from,
+      to: tx.to,
+      direction: "unknown",
+      notionalUsd: tx.notionalUsd,
+    },
+  }
 }
 
 async function nativeMarkets(
@@ -180,7 +227,15 @@ export async function syncWallet(input: unknown): Promise<SyncWalletResult> {
     )
   }
 
+  const deadline = Date.now() + 40_000
   const settled = await mapPool(chains, 4, async (chain) => {
+    if (Date.now() > deadline) {
+      return {
+        chainId: chain.id,
+        rows: [] as NormalizedTransaction[],
+        message: `${chain.name} was skipped because the scan time budget ended.`,
+      }
+    }
     try {
       const rows = await loadChain(chain, address, indexer)
       return { chainId: chain.id, rows, message: null }
@@ -198,60 +253,92 @@ export async function syncWallet(input: unknown): Promise<SyncWalletResult> {
     else fetched.push(...result.rows)
   }
 
-  if (fetched.length === 0 && errors.length === chains.length) {
-    throw new IndexerError(
-      errors.map((error) => error.message).join(" "),
-      502,
+  if (fetched.length === 0 && errors.length > 0) {
+    console.error(
+      "Wallet history returned no transactions.",
+      errors
+        .slice(0, 8)
+        .map((item) => `${item.chainId}: ${item.message}`)
+        .join(" | "),
     )
   }
 
-  const markets = await nativeMarkets(chains, fetched)
-  const enriched = await mapPool(fetched, 4, (tx) => {
-    const chain = chains.find((item) => item.id === tx.chainId)!
+  let markets = new Map<string, number>()
+  try {
+    markets = await nativeMarkets(chains, fetched)
+  } catch (error) {
+    console.error(error)
+    warnings.push("Historical gas prices were unavailable. Transactions are still indexed.")
+  }
+  const enriched = await mapPool(fetched, 4, async (tx) => {
+    const chain = chains.find((item) => item.id === tx.chainId)
+    if (!chain) return null
     const marketNativeUsd = chain.nativePriceId
       ? markets.get(`${tx.chainId}:${tx.hash}:${chain.nativePriceId}`) ?? null
       : null
-    return enrichTransaction(chain, address, tx, indexer, marketNativeUsd)
+    try {
+      return await enrichTransaction(chain, address, tx, indexer, marketNativeUsd)
+    } catch (error) {
+      console.error(error)
+      return {
+        priceSource: "unpriced" as const,
+        row: plainRow(chain, address, tx, indexer),
+      }
+    }
   })
-  let transactions = enriched.map((item) => item.row)
+  let transactions = enriched.flatMap((item) => (item ? [item.row] : []))
   try {
     transactions = await applySpamFlags(transactions)
   } catch {
     warnings.push("Spam screening did not finish. Detected tokens stay visible.")
   }
-  if (enriched.some((item) => item.priceSource === "unpriced")) {
+  if (enriched.some((item) => item?.priceSource === "unpriced")) {
     warnings.push(
       "At least one gas figure is unpriced because DefiLlama had no native quote at that timestamp.",
     )
   }
 
-  const wallet = await persistSeedAndWallet({
+  const walletDraft: WalletRow = {
     id: `wal_${address.slice(2, 14).toLowerCase()}`,
     address,
     label: null,
     tags: ["watch"],
     created_at: new Date().toISOString(),
-  })
-  await persistTransactions(transactions)
-
+  }
   const contracts = transactions.flatMap((row) => {
     const raw = row.raw_data
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return []
     const to = raw.to
     return typeof to === "string" ? [to] : []
   })
+  rememberIndexed(walletDraft, transactions)
   const completed = markChecklistForContracts(address, contracts)
-  await persistChecklist(completed)
+  let wallet = walletDraft
+  let persistence: Persistence = persistenceMode()
+  try {
+    wallet = await persistSeedAndWallet(walletDraft)
+    await persistTransactions(transactions)
+    await persistChecklist(completed)
+  } catch (error) {
+    console.error(error)
+    persistence = "memory"
+    warnings.push("The remote store did not accept this index. Results stay available in this session.")
+  }
+
+  const reportedErrors = fetched.length === 0 ? [] : errors.slice(0, 8)
+  if (fetched.length > 0 && errors.length > reportedErrors.length) {
+    warnings.push(`${errors.length - reportedErrors.length} more networks did not return history.`)
+  }
 
   return {
     indexer,
-    persistence: persistenceMode(),
+    persistence,
     address,
     chains: chains.map((chain) => chain.id),
     imported: transactions.length,
     wallet,
     transactions,
-    errors,
+    errors: reportedErrors,
     warnings,
   }
 }

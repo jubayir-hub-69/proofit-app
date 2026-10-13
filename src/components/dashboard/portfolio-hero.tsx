@@ -69,7 +69,7 @@ export function PortfolioHero() {
                 : data.netWorthStatus === "unavailable"
                   ? "The balance scan did not complete."
                   : data.netWorthStatus === "empty"
-                    ? "No non-zero balance on Ethereum, BSC, Arbitrum, Base, or Polygon."
+                    ? "No non-zero balance on the indexed EVM networks."
                     : "Sum of held assets with a live DefiLlama price."}
           </p>
           {activeChains.length > 0 ? (

@@ -173,7 +173,7 @@ export function LedgerView() {
                     <td colSpan={7} className="px-4 py-8 text-sm text-zinc-500">
                       {hideSpam && data.transactions.length > 0
                         ? "Spam and dust transfers are hidden. Uncheck the filter to see them."
-                        : "No logs named this wallet in the current sync window."}
+                        : "No transactions found."}
                     </td>
                   </tr>
                 ) : (

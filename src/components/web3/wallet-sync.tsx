@@ -35,6 +35,8 @@ export function WalletSync() {
     hint = `${shortenAddress(address)} · portfolio ${worth}`
   } else if (address && portfolio.isError) {
     hint = `${shortenAddress(address)} · portfolio unavailable`
+  } else if (address && status.settled && status.imported === 0) {
+    hint = "No transactions found."
   } else if (address && status.settled && status.imported !== null) {
     hint = `${shortenAddress(address)} · indexed ${status.imported} transactions`
   }
